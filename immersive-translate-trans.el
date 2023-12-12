@@ -21,6 +21,13 @@
   "Immersive translate translate-shell backend."
   :group 'immersive-translate)
 
+(defcustom immersive-translate-trans-exec "C:/Users/zhijia.zhang/go/bin/trans.exe"
+  "Translation exec used by trans.
+
+See https://github.com/soimort/translate-shell for more details."
+  :group 'immersive-translate-trans
+  :type 'string)
+
 (defcustom immersive-translate-trans-engine "google"
   "Translation engine used by trans.
 
@@ -28,7 +35,7 @@ See https://github.com/soimort/translate-shell for more details."
   :group 'immersive-translate-trans
   :type 'string)
 
-(defcustom immersive-translate-trans-source-language "en"
+(defcustom immersive-translate-trans-source-language "EN"
   "The source language need to be translated.
 
 See https://github.com/soimort/translate-shell#code-list for more
@@ -36,7 +43,7 @@ details."
   :group 'immersive-translate-trans
   :type 'string)
 
-(defcustom immersive-translate-trans-target-language "zh-CN"
+(defcustom immersive-translate-trans-target-language "ZH"
   "The target language.
 
 See https://github.com/soimort/translate-shell#code-list for more
@@ -51,17 +58,13 @@ See https://github.com/soimort/translate-shell for more details."
   :group 'immersive-translate-trans
   :type 'string)
 
-(defun immersive-translate-trans-make-command (text)
+
+(defun immersive-translate-trans-make-command-detect-lang (source target text)
   "Generate the whole translate-shell command fot TEXT."
-  (list (concat
-         "trans"
-         " -e " immersive-translate-trans-engine
-         " -s " immersive-translate-trans-source-language
-         " -t " immersive-translate-trans-target-language
-         " "
-         immersive-translate-trans-default-args
-         " "
-         (shell-quote-argument text))))
+  (list (concat immersive-translate-trans-exec
+         " -s " source
+         " -t " target
+         " " text)))
 
 (defun immersive-translate-trans--parse-response (buf)
   "Parse the buffer BUF with translate-shell's response."
@@ -99,6 +102,25 @@ PROCESS and _STATUS are process parameters."
     (setf (alist-get process immersive-translate--process-alist nil 'remove) nil)
     (kill-buffer proc-buf)))
 
+(defun contains-chinese-p (text)
+  "Check if TEXT contains any Chinese characters."
+  (cl-loop for char across text
+           thereis (or (and (>= char #x4E00) (<= char #x9FFF))
+                       (and (>= char #x3400) (<= char #x4DBF))
+                       (and (>= char #x20000) (<= char #x2A6DF))
+                       (and (>= char #x2A700) (<= char #x2B73F))
+                       (and (>= char #x2B740) (<= char #x2B81F))
+                       (and (>= char #x2B820) (<= char #x2CEAF))
+                       (and (>= char #x2CEB0) (<= char #x2EBEF))
+                       (and (>= char #xF900) (<= char #xFAFF))
+                       (and (>= char #x2F800) (<= char #x2FA1F)))))
+
+(defun detect-language (text)
+  "Detect if TEXT is Chinese or English. Return a list where the first element is the source language and the second element is the target language."
+  (if (contains-chinese-p text)
+      '("ZH" "EN")
+    '("EN" "ZH")))
+
 ;; TODO: define a more generic function
 (defun immersive-translate-trans-translate (info &optional callback)
   "Translate the content in INFO.
@@ -110,10 +132,15 @@ INFO is a plist with the following keys:
 
 Call CALLBACK with the response and INFO afterwards. If omitted
 the response is inserted into the current buffer after point."
-  (let* ((token (md5 (format "%s%s%s%s"
+  (let* ((text (plist-get info :content))
+         (languages (detect-language text))
+         (source (nth 0 languages))
+         (target (nth 1 languages))
+         (token (md5 (format "%s%s%s%s"
                              (random) (emacs-pid) (user-full-name)
                              (recent-keys))))
-         (command (immersive-translate-trans-make-command (plist-get info :content)))
+         ;; (command (immersive-translate-trans-make-command (plist-get info :content)))
+         (command (immersive-translate-trans-make-command-detect-lang source target text))
          (process (apply #'start-process-shell-command "immersive-translate-trans"
                          (generate-new-buffer "*immersive-translate-trans*") command)))
     (with-current-buffer (process-buffer process)
@@ -123,9 +150,9 @@ the response is inserted into the current buffer after point."
                          :callback (or callback
                                        #'immersive-translate-callback))
                    info))
+
       (set-process-sentinel process #'immersive-translate-trans--sentinel))))
 
 
 (provide 'immersive-translate-trans)
 ;;; immersive-translate-trans.el ends here
-

@@ -77,12 +77,12 @@ string. It should return the transformed string."
   :group 'immersive-translate
   :type 'hook)
 
-(defcustom immersive-translate-pending-message "🔄"
+(defcustom immersive-translate-pending-message "…"
   "Text displayed before the translation results are returned."
   :group 'immersive-translate
   :type 'string)
 
-(defcustom immersive-translate-failed-message "🔀"
+(defcustom immersive-translate-failed-message "✖"
   "Text displayed when translation fails."
   :group 'immersive-translate
   :type 'string)
