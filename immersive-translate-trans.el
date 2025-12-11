@@ -60,21 +60,17 @@ See https://github.com/soimort/translate-shell for more details."
 
 
 (defun immersive-translate-trans-make-command-detect-lang (source target text)
-  "Generate the whole translate-shell command fot TEXT."
-  (list (concat immersive-translate-trans-exec
-         " -s " source
-         " -t " target
-         " " text)))
+  "Generate the translate-shell command list for TEXT."
+  (list immersive-translate-trans-exec
+        "-s" source
+        "-t" target
+        text))
 
 (defun immersive-translate-trans--parse-response (buf)
   "Parse the buffer BUF with translate-shell's response."
   (with-current-buffer buf
-    (goto-char (point-max))
-    (let ((raw-content (buffer-substring-no-properties
-                        (line-beginning-position 0)
-                        (line-end-position 0))))
-      (string-trim (or raw-content
-                       "")))))
+    (string-trim
+     (buffer-substring-no-properties (point-min) (point-max)))))
 
 
 ;; TODO: define a more generic sentinel
@@ -141,7 +137,7 @@ the response is inserted into the current buffer after point."
                              (recent-keys))))
          ;; (command (immersive-translate-trans-make-command (plist-get info :content)))
          (command (immersive-translate-trans-make-command-detect-lang source target text))
-         (process (apply #'start-process-shell-command "immersive-translate-trans"
+         (process (apply #'start-process "immersive-translate-trans"
                          (generate-new-buffer "*immersive-translate-trans*") command)))
     (with-current-buffer (process-buffer process)
       (set-process-query-on-exit-flag process nil)
