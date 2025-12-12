@@ -375,7 +375,7 @@ WEIGHTS."
                     (setq acc-len (+ acc-len (length word) (if (> acc-len 0) 1 0)))))
                 (let ((line-str (string-join (nreverse acc) " ")))
                   (setq remaining-text-len (max 0 (- remaining-text-len (length line-str))))
-                  (push line-str lines)))))))))
+                  (push line-str lines))))))))
     (nreverse lines)))
 
 (defun immersive-translate--split-into-clauses (text)
@@ -419,7 +419,7 @@ returned list length matches COUNTS."
                      (take (min target (max 1 (- (length remaining-clauses) min-keep))))
                      (picked (cl-subseq remaining-clauses 0 take)))
                 (setq remaining-clauses (nthcdr take remaining-clauses))
-                (push (string-clean-whitespace (string-join picked " ")) lines)))))))))
+                (push (string-clean-whitespace (string-join picked " ")) lines))))))))
     (nreverse lines)))
 
 (defun immersive-translate--format-translation-preserve-lines (str marker raw-paragraph)
