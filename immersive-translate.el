@@ -18,6 +18,8 @@
 (require 'dom)
 (require 'auth-source)
 (require 'text-property-search)
+(require 'cl-lib)
+(require 'subr-x)
 (require 'immersive-translate-baidu)
 (require 'immersive-translate-chatgpt)
 (require 'immersive-translate-trans)
@@ -339,6 +341,118 @@ translation should be inserted."
             ,@immersive-translate-translation-filter-functions))))
      "\n")))
 
+(defun immersive-translate--split-response-to-lines (response weights)
+  "Split RESPONSE into lines proportionally to WEIGHTS.
+
+WEIGHTS is a list of non-negative integers. Zero means an empty
+line should be produced. The returned list length matches
+WEIGHTS."
+  (let* ((words (split-string response " " t))
+         (line-count (length weights))
+         (lines '())
+         (remaining-words words)
+         (remaining-text-len (length response)))
+    (dotimes (i line-count)
+      (let ((w (nth i weights)))
+        (if (<= w 0)
+            (push "" lines)
+          (let* ((nonzero-remaining (cl-remove-if (lambda (x) (<= x 0)) (nthcdr i weights)))
+                 (last-nonzero (null (cdr nonzero-remaining))))
+            (if last-nonzero
+                (progn
+                  (push (string-join remaining-words " ") lines)
+                  (setq remaining-words nil
+                        remaining-text-len 0))
+              (let* ((remaining-weight-sum (apply #'+ nonzero-remaining))
+                     (target (max 1 (round (* remaining-text-len (/ (float w) remaining-weight-sum)))))
+                     (acc '())
+                     (acc-len 0))
+                (while (and remaining-words
+                            (or (= acc-len 0) (< acc-len target)))
+                  (let ((word (car remaining-words)))
+                    (setq remaining-words (cdr remaining-words))
+                    (push word acc)
+                    (setq acc-len (+ acc-len (length word) (if (> acc-len 0) 1 0)))))
+                (let ((line-str (string-join (nreverse acc) " ")))
+                  (setq remaining-text-len (max 0 (- remaining-text-len (length line-str))))
+                  (push line-str lines)))))))))
+    (nreverse lines)))
+
+(defun immersive-translate--split-into-clauses (text)
+  "Split TEXT into semantic clauses by strong punctuation.
+
+Returns a list of clause strings with ending punctuation kept."
+  (let* ((normalized (string-trim (or text "")))
+         (marked (replace-regexp-in-string
+                  "\\([。！？.!?；;：:…]+\\)" "\\1\n" normalized))
+         (parts (split-string marked "\n" t)))
+    parts))
+
+(defun immersive-translate--split-clauses-to-lines (clauses counts)
+  "Distribute CLAUSES into lines based on COUNTS.
+
+COUNTS is a list of non-negative integers representing how many
+clauses each source line contains (0 means empty line). The
+returned list length matches COUNTS."
+  (let* ((line-count (length counts))
+         (lines '())
+         (remaining-clauses clauses))
+    (dotimes (i line-count)
+      (let ((c (nth i counts)))
+        (cond
+         ((<= c 0)
+          (push "" lines))
+         ((null remaining-clauses)
+          (push "" lines))
+         (t
+          (let* ((nonzero-remaining (cl-remove-if (lambda (x) (<= x 0)) (nthcdr i counts)))
+                 (last-nonzero (null (cdr nonzero-remaining))))
+            (if last-nonzero
+                (progn
+                  (push (string-clean-whitespace (string-join remaining-clauses " ")) lines)
+                  (setq remaining-clauses nil))
+              (let* ((remaining-count-sum (apply #'+ nonzero-remaining))
+                     (remaining-lines (length nonzero-remaining))
+                     (min-keep (1- remaining-lines))
+                     (target (max 1 (round (* (length remaining-clauses)
+                                              (/ (float c) remaining-count-sum)))))
+                     (take (min target (max 1 (- (length remaining-clauses) min-keep))))
+                     (picked (cl-subseq remaining-clauses 0 take)))
+                (setq remaining-clauses (nthcdr take remaining-clauses))
+                (push (string-clean-whitespace (string-join picked " ")) lines)))))))))
+    (nreverse lines)))
+
+(defun immersive-translate--format-translation-preserve-lines (str marker raw-paragraph)
+  "Format STR at MARKER preserving RAW-PARAGRAPH line breaks.
+
+RAW-PARAGRAPH is the original paragraph string (possibly with
+hard newlines). The translation is reflowed to the same line
+structure instead of hard filling to `fill-column'."
+  (let* ((raw (string-trim-right (or raw-paragraph "") "\n"))
+         (raw-lines (split-string raw "\n" nil))
+         (counts (mapcar (lambda (l)
+                           (let ((tline (string-trim l)))
+                             (if (string-empty-p tline)
+                                 0
+                               (max 1 (length (immersive-translate--split-into-clauses tline))))))
+                         raw-lines))
+         (clean-str (string-clean-whitespace
+                     (replace-regexp-in-string "\n" " " (or str ""))))
+         (clauses (immersive-translate--split-into-clauses clean-str))
+         (reflowed (if (<= (length counts) 1)
+                       clean-str
+                     (string-join (immersive-translate--split-clauses-to-lines clauses counts) "\n"))))
+    (concat
+     "\n"
+     (replace-regexp-in-string
+      "^"
+      (immersive-translate--get-indent marker)
+      (eval
+       `(thread-last
+          ,reflowed
+          ,@immersive-translate-translation-filter-functions)))
+     "\n")))
+
 (defun immersive-translate--info-transform-response (str marker)
   "Format STR at MARKER in `Info-mode'."
   (let* ((fill-column 70)
@@ -457,15 +571,21 @@ INFO is a plist containing information relevant to this buffer."
               (start-marker (plist-get info :position))
               (origin-content (plist-get info :content)))
     (with-current-buffer origin-buffer
-	      (if response
-		  (progn
-		    (setq response (immersive-translate--sanitize-response response))
-		    (setq response (immersive-translate--transform-response response start-marker))
-		    (save-excursion
-		      (with-current-buffer (marker-buffer start-marker)
-			(goto-char start-marker)
-			(immersive-translate--add-ov response)
-                (unless (string-match-p immersive-translate-failed-message response)
+		      (if response
+			  (progn
+			    (setq response (immersive-translate--sanitize-response response))
+			    (setq response
+                      (if (plist-get info :preserve-lines)
+                          (immersive-translate--format-translation-preserve-lines
+                           response
+                           start-marker
+                           (plist-get info :raw-paragraph))
+                        (immersive-translate--transform-response response start-marker)))
+			    (save-excursion
+			      (with-current-buffer (marker-buffer start-marker)
+				(goto-char start-marker)
+				(immersive-translate--add-ov response)
+	                (unless (string-match-p immersive-translate-failed-message response)
                   (immersive-translate--cache-translation response origin-content)))))
         (message "Response error: (%s) %s"
                  status-str (plist-get info :error))))))
@@ -621,8 +741,8 @@ of `immersive-translate-backend' is used."
   (interactive)
   (save-excursion
     (unless (immersive-translate-disable-p)
-      (when-let* ((paragraph (immersive-translate-join-lin
-                              (immersive-translate--get-paragraph)))
+      (when-let* ((raw-paragraph (immersive-translate--get-paragraph))
+                  (paragraph (immersive-translate-join-lin raw-paragraph))
                   (content (if (eq immersive-translate-backend 'chatgpt)
                                (immersive-translate-chatgpt-create-prompt paragraph)
                              paragraph))
@@ -635,7 +755,12 @@ of `immersive-translate-backend' is used."
           (overlay-put ov
                        'after-string
                        immersive-translate-pending-message)
-          (immersive-translate-do-translate content))))))
+          (immersive-translate-do-translate
+           content
+           (lambda (resp info)
+             (let ((info2 (plist-put (plist-put info :raw-paragraph raw-paragraph)
+                                     :preserve-lines t)))
+               (immersive-translate-callback resp info2)))))))))
 
 ;;;###autoload
 (defun immersive-translate-clear ()
