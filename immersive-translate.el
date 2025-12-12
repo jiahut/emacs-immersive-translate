@@ -752,15 +752,16 @@ of `immersive-translate-backend' is used."
             (let ((translation (immersive-translate--cache-get content)))
               (immersive-translate--add-ov translation))
           (setq ov (make-overlay (1- (point)) (point)))
-          (overlay-put ov
-                       'after-string
-                       immersive-translate-pending-message)
-          (immersive-translate-do-translate
-           content
-           (lambda (resp info)
-             (let ((info2 (plist-put (plist-put info :raw-paragraph raw-paragraph)
-                                     :preserve-lines t)))
-               (immersive-translate-callback resp info2)))))))))
+	          (overlay-put ov
+	                       'after-string
+	                       immersive-translate-pending-message)
+	          (immersive-translate-do-translate
+	           content
+	           :callback
+	           (lambda (resp info)
+	             (let ((info2 (plist-put (plist-put info :raw-paragraph raw-paragraph)
+	                                     :preserve-lines t)))
+	               (immersive-translate-callback resp info2)))))))))
 
 ;;;###autoload
 (defun immersive-translate-clear ()
