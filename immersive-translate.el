@@ -371,6 +371,17 @@ translation should be inserted."
   (let ((fill-column 70))
     (immersive-translate--format-translation str marker)))
 
+(defun immersive-translate--sanitize-response (response)
+  "Remove unwanted control characters from RESPONSE."
+  (when response
+    (let ((clean response))
+      ;; Normalize CRLF and strip remaining carriage returns.
+      (setq clean (replace-regexp-in-string "\r\n" "\n" clean))
+      (setq clean (replace-regexp-in-string "\r" "" clean))
+      ;; Strip backspaces and other non-printing C0 control chars except tab/newline.
+      (setq clean (replace-regexp-in-string "[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]" "" clean))
+      clean)))
+
 (defun immersive-translate--transform-response (content-str &optional marker)
   "Format CONTENT-STR at MARKER."
   (pcase major-mode
@@ -426,11 +437,11 @@ The filename is based on ORIGIN-CONTENT."
 
 The value of after-string is RESPONSE."
   (let ((ovs (overlays-in (1- (point)) (point)))
-        (new-ov (make-overlay (point) (1+ (point)))))
+	 (new-ov (make-overlay (point) (1+ (point)))))
     (mapc (lambda (ov)
-            (when (overlay-get ov 'after-string)
-              (delete-overlay ov)))
-          ovs)
+	    (when (overlay-get ov 'after-string)
+	      (delete-overlay ov)))
+	  ovs)
     (overlay-put new-ov
                  'after-string
                  response)
@@ -446,13 +457,14 @@ INFO is a plist containing information relevant to this buffer."
               (start-marker (plist-get info :position))
               (origin-content (plist-get info :content)))
     (with-current-buffer origin-buffer
-      (if response
-          (progn
-            (setq response (immersive-translate--transform-response response start-marker))
-            (save-excursion
-              (with-current-buffer (marker-buffer start-marker)
-                (goto-char start-marker)
-                (immersive-translate--add-ov response)
+	      (if response
+		  (progn
+		    (setq response (immersive-translate--sanitize-response response))
+		    (setq response (immersive-translate--transform-response response start-marker))
+		    (save-excursion
+		      (with-current-buffer (marker-buffer start-marker)
+			(goto-char start-marker)
+			(immersive-translate--add-ov response)
                 (unless (string-match-p immersive-translate-failed-message response)
                   (immersive-translate--cache-translation response origin-content)))))
         (message "Response error: (%s) %s"
